@@ -3,12 +3,10 @@
 {
     "name": "Verify email at signup",
     "summary": "Force uninvited users to use a good email for signup",
-    "version": "18.0.1.0.0",
+    "version": "19.0.1.0.0",
     "category": "Authentication",
     "website": "https://github.com/OCA/server-auth",
-    "author": "Antiun Ingeniería S.L., "
-    "Tecnativa, "
-    "Odoo Community Association (OCA)",
+    "author": "Antiun Ingeniería S.L., Tecnativa, Odoo Community Association (OCA)",
     "license": "AGPL-3",
     "depends": ["auth_signup"],
     "external_dependencies": {"python": ["lxml", "email_validator"]},
