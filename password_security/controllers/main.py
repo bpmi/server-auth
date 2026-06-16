@@ -15,11 +15,11 @@ _logger = logging.getLogger(__name__)
 
 
 class PasswordSecurityHome(AuthSignupHome):
-    def do_signup(self, qcontext):
+    def do_signup(self, qcontext, *args, **kwargs):
         password = qcontext.get("password")
         user = request.env.user
         user._check_password(password)
-        return super().do_signup(qcontext)
+        return super().do_signup(qcontext, *args, **kwargs)
 
     @http.route()
     def web_login(self, *args, **kw):
@@ -38,6 +38,11 @@ class PasswordSecurityHome(AuthSignupHome):
         request.session.logout(keep_db=True)
         # I was kicked out, so set login_success in request params to False
         request.params["login_success"] = False
+        # In Odoo 19 _login() reads (and caches) login_date on the request env
+        # before _update_last_login() writes the new one; drop the stale value
+        # so the signup token embeds the current login date, otherwise the reset
+        # link is rejected with "Invalid signup token".
+        request.env.user.invalidate_recordset(["login_date", "log_ids"])
         redirect = request.env.user.partner_id._get_signup_url()
         return request.redirect(redirect)
 

@@ -23,7 +23,7 @@ class TestPasswordSecurityLogin(HttpCase):
     def login(self, username, password):
         """Log in with provided credentials."""
         self.session = http.root.session_store.new()
-        self.opener = Opener(self.env.cr)
+        self.opener = Opener(self)
         self.opener.cookies.set("session_id", self.session.sid, domain=HOST, path="/")
 
         with mock.patch("odoo.http.db_filter") as db_filter:
@@ -152,3 +152,56 @@ class TestPasswordSecurityLogin(HttpCase):
         req_page = self.url_open("/web")
         self.assertTrue(req_page.request.path_url.startswith("/web/login"))
         self.assertEqual(req_page.status_code, 200)
+
+    def test_08_web_login_expire_pass_valid_token(self):
+        """The expiry bounce must hand the user a VALID reset token.
+
+        Regression: in Odoo 19 ``res.users._login()`` reads ``login_date``
+        into the request environment cache (its timezone check) before
+        ``_update_last_login()`` writes the new one. The expiry bounce then
+        signed that stale login date into the signup token, so the reset
+        page rejected it with "Invalid signup token". It only reproduces
+        when the browser sends a ``tz`` cookie and the user has a timezone
+        set -- which is why a header-less request never hit it.
+        """
+        # A timezone on the user makes _login() evaluate (and cache) login_date
+        three_days_ago = datetime.now() - timedelta(days=3)
+        two_days_ago = datetime.now() - timedelta(days=2)
+        with Registry(get_db_name()).cursor() as cr:
+            env = self.env(cr)
+            user = env["res.users"].search([("login", "=", self.username)])
+            user.tz = "Europe/Brussels"
+            user.password_write_date = three_days_ago
+            # A prior login dated clearly in the past: the stale login_date
+            # _login() caches must differ from the fresh one the bounce creates,
+            # otherwise the truncated-to-second timestamps would collude.
+            log = env["res.users.log"].create({})
+            cr.execute(
+                "UPDATE res_users_log SET create_uid = %s, create_date = %s "
+                "WHERE id = %s",
+                (user.id, two_days_ago, log.id),
+            )
+            env["ir.config_parameter"].sudo().set_param(
+                "password_security.expiration_days", 1
+            )
+
+        # Log in sending a tz cookie, exactly like a real browser does
+        self.session = http.root.session_store.new()
+        self.opener = Opener(self)
+        self.opener.cookies.set("session_id", self.session.sid, domain=HOST, path="/")
+        self.opener.cookies.set("tz", "Europe/Brussels", domain=HOST, path="/")
+        with mock.patch("odoo.http.db_filter") as db_filter:
+            db_filter.side_effect = lambda dbs, host=None: [get_db_name()]
+            response = self.url_open(
+                "/web/login",
+                data={
+                    "login": self.username,
+                    "password": self.passwd,
+                    "csrf_token": http.Request.csrf_token(self),
+                },
+            )
+        response.raise_for_status()
+
+        # We must land on the reset page, and the token must be accepted
+        self.assertIn("/web/reset_password", response.request.path_url)
+        self.assertNotIn("Invalid signup token", response.text)

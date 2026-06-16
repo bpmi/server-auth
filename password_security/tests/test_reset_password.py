@@ -19,7 +19,7 @@ class TestPasswordSecurityReset(HttpCase):
     def reset_password(self, username):
         """Reset user password"""
         self.session = http.root.session_store.new()
-        self.opener = Opener(self.env.cr)
+        self.opener = Opener(self)
         self.opener.cookies.set("session_id", self.session.sid, domain=HOST, path="/")
 
         with mock.patch("odoo.http.db_filter") as db_filter:
@@ -29,6 +29,36 @@ class TestPasswordSecurityReset(HttpCase):
                 data={
                     "login": username,
                     "name": username,
+                    "csrf_token": http.Request.csrf_token(self),
+                },
+            )
+        res_post.raise_for_status()
+
+        return res_post
+
+    def reset_password_with_token(self, user, new_password):
+        """Submit a new password through the token-based reset flow.
+
+        This exercises ``web_auth_reset_password`` with a token, which in
+        Odoo 19 calls ``do_signup(qcontext, do_login=False)``.
+        """
+        partner = user.partner_id.sudo()
+        partner.signup_prepare(signup_type="reset")
+        token = partner._generate_signup_token()
+
+        self.session = http.root.session_store.new()
+        self.opener = Opener(self)
+        self.opener.cookies.set("session_id", self.session.sid, domain=HOST, path="/")
+
+        with mock.patch("odoo.http.db_filter") as db_filter:
+            db_filter.side_effect = lambda dbs, host=None: [get_db_name()]
+            res_post = self.url_open(
+                "/web/reset_password",
+                data={
+                    "token": token,
+                    "login": user.login,
+                    "password": new_password,
+                    "confirm_password": new_password,
                     "csrf_token": http.Request.csrf_token(self),
                 },
             )
@@ -91,3 +121,26 @@ class TestPasswordSecurityReset(HttpCase):
         self.assertFalse(self.env.user._is_admin())
         with self.assertRaises(UserError):
             self.env["res.users"].reset_password("demo")
+
+    def test_04_reset_password_with_token(self):
+        """Token-based reset must succeed (do_signup do_login regression).
+
+        Before the v19 fix, the ``do_signup`` override narrowed its
+        signature and raised ``TypeError`` when ``web_auth_reset_password``
+        called it with ``do_login=False``, so submitting a new password via
+        a reset link failed.
+        """
+        # Minimum Hours must not interfere with the token submission
+        self.env["ir.config_parameter"].sudo().set_param(
+            "password_security.minimum_hours", 0
+        )
+        user = self.env["res.users"].search([("login", "=", "jackoneill")], limit=1)
+        new_password = "!asdQWE12345_New"
+
+        response = self.reset_password_with_token(user, new_password)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(
+            "Your password has been reset successfully",
+            response.text,
+        )
