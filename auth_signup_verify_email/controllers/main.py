@@ -25,7 +25,11 @@ class SignupVerifyEmail(AuthSignupHome):
 
         # Check good format of e-mail
         try:
-            validate_email(values.get("login", ""))
+            # Syntax-only: no live DNS/MX deliverability lookup (it needs server
+            # outbound DNS, adds signup latency, and rejects reserved TLDs like
+            # .test/.example). The emailed activation link is the real
+            # reachability proof. (BPMI customization.)
+            validate_email(values.get("login", ""), check_deliverability=False)
         except EmailSyntaxError as error:
             qcontext["error"] = getattr(
                 error,
